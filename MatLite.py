@@ -1317,3 +1317,20 @@ if __name__ == "__main__":
     print('-'*20)
     print(Matrix.sum(R, 0))
     
+    
+    A = Matrix(np.array([[3., 2.],
+                         [1., 2.]]))
+    B = Matrix(np.array([[1.],
+                         [2.]]))
+
+    print(A*B)
+    # Produits matriciels
+    print("A * A =\n", (A * A))
+    print("A @ A =\n", (A @ A))
+
+    # Résolution de système
+    B = Matrix(np.array([[5.], [5.]]))
+    x = A.backslash(B)
+    print("Solution système A x = B :\n", x)
+    x = Matrix.backslash(A, B)
+    print("Solution système A x = B :\n", x)
