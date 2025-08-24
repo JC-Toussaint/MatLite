@@ -1487,13 +1487,27 @@ if __name__ == "__main__":
     import time
 
     A = Matrix.rand(2000, 2000)  # ~32MB
-
+        
     # Test COW
     start = time.time()
     B = Matrix(A)  # COW
     print(f"COW: {time.time() - start:.2g}s")  # ~0.000001s
-    print(Matrix.max(B-A))
+    print("Info COW A :", A.is_cow_active())
+    print("Info COW B :", B.is_cow_active())
     
+    print('id : ', id(A.data), id(B.data))
+    A[0, 0] = -100
+    C = A
+    print('id : ', id(A.data), id(B.data))
+    B[0, 0] = -200
+    print('id : ', id(A.data), id(B.data))
+    B[0, 1] = -200
+    print('id : ', id(A.data), id(B.data))
+    
+    print("Info COW A :", A.is_cow_active())
+    print("Info COW B :", B.is_cow_active())
+    print("Info COW C :", C.is_cow_active())
+                 
     # Test copie immédiate
     start = time.time() 
     C = A.copy()  # Vraie copie
@@ -1501,3 +1515,8 @@ if __name__ == "__main__":
 
     # Modification → COW se déclenche automatiquement
     B[0, 0] = 999  # Première modif → copie automatique
+    
+    p = np.array([1, 2, 3])
+    r = p
+    p += 2*r
+    print(p, r)
