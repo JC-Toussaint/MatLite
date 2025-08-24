@@ -24,7 +24,7 @@ MatLite fournit une classe `Matrix` qui encapsule les matrices NumPy et SciPy.sp
 ## Installation
 
 ```bash
-git clone https://github.com/votre-username/MatLite.git
+git clone https://github.com/JC-Toussaint/MatLite.git
 cd MatLite
 pip install -r requirements.txt
 ```
