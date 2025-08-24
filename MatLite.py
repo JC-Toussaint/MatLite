@@ -5,6 +5,9 @@ from scipy.sparse.linalg import spsolve
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
+import weakref
+from typing import Optional, Union, Any
+import copy
 
 def backslash(A, b):
     """
@@ -39,48 +42,167 @@ def backslash(A, b):
 def _is_scalar(x):
     return np.isscalar(x) or (isinstance(x, np.ndarray) and x.ndim == 0)
 
+class COWData:
+    """
+    Classe pour gérer les données avec Copy-on-Write.
+    Permet de partager les données entre plusieurs Matrix tant qu'aucune modification n'est effectuée.
+    """
+    
+    def __init__(self, data):
+        """
+        Initialise un conteneur COW avec les données.
+        
+        Args:
+            data: Les données à encapsuler (np.ndarray ou scipy.sparse)
+        """
+        self._data = data
+        self._is_view = False
+        self._parent_ref = None  # Référence faible vers le parent
+        self._children = weakref.WeakSet()  # Références faibles vers les enfants
+        self._is_modified = False
+    
+    @property
+    def data(self):
+        """Accès en lecture aux données."""
+        return self._data
+    
+    @property
+    def shape(self):
+        """Forme des données."""
+        return self._data.shape
+    
+    def _ensure_writable(self):
+        """
+        S'assure que les données sont modifiables.
+        Effectue une copie si nécessaire (Copy-on-Write).
+        """
+        if self._is_view or len(self._children) > 0:
+            # Copie nécessaire : soit c'est une vue, soit il y a des enfants
+            if isinstance(self._data, np.ndarray):
+                self._data = self._data.copy()
+            elif sp.issparse(self._data):
+                self._data = self._data.copy()
+            else:
+                # Fallback pour d'autres types
+                self._data = copy.deepcopy(self._data)
+            
+            # Réinitialiser les références
+            self._is_view = False
+            self._parent_ref = None
+            self._children.clear()
+        
+        self._is_modified = True
+        return self._data
+    
+    def create_view(self):
+        """
+        Crée une nouvelle vue COW des mêmes données.
+        
+        Returns:
+            COWData: Nouvelle instance partageant les mêmes données
+        """
+        new_cow = COWData(self._data)
+        new_cow._is_view = True
+        new_cow._parent_ref = weakref.ref(self)
+        self._children.add(new_cow)
+        return new_cow
+    
+    def slice_view(self, key):
+        """
+        Crée une vue COW pour un slice des données.
+        
+        Args:
+            key: Clé de slicing
+            
+        Returns:
+            COWData: Nouvelle instance avec les données slicées
+        """
+        if isinstance(self._data, np.ndarray):
+            sliced_data = self._data[key]
+            # Si c'est une vue NumPy, on la garde comme vue
+            if sliced_data.base is not None:
+                new_cow = COWData(sliced_data)
+                new_cow._is_view = True
+                new_cow._parent_ref = weakref.ref(self)
+                self._children.add(new_cow)
+                return new_cow
+            else:
+                # C'est déjà une copie
+                return COWData(sliced_data)
+        elif sp.issparse(self._data):
+            # Pour les matrices creuses, le slicing crée généralement une copie
+            return COWData(self._data[key])
+        else:
+            return COWData(self._data[key])
+    
+    def __setitem__(self, key, value):
+        """Modification avec COW."""
+        writable_data = self._ensure_writable()
+        writable_data[key] = value
+    
+    def __getitem__(self, key):
+        """Accès en lecture."""
+        return self._data[key]
+
 class Matrix:
     def __init__(self, data):
         """
-        Constructeur pour Matrix.
+        Constructeur pour Matrix avec support Copy-on-Write.
         - Liste de listes -> np.array(data) (forme n x m)
         - Liste simple -> np.array([data]) (1 x n)
         - np.ndarray 1D -> reshape en (1 x n)
         - np.ndarray 2D -> gardé tel quel
         - Matrice creuse -> gardée telle quelle
+        - Matrix -> partage les données (COW)
         """
-        if isinstance(data, sp.spmatrix):
-            self.data = data
+        if isinstance(data, Matrix):
+            # Copy-on-Write : partager les données de l'autre Matrix
+            self._cow_data = data._cow_data.create_view()
+        elif isinstance(data, COWData):
+            self._cow_data = data.create_view()
+        elif isinstance(data, sp.spmatrix):
+            self._cow_data = COWData(data)
         elif isinstance(data, np.ndarray):
             if data.ndim == 1:
-                self.data = data.reshape(1, -1)  # vecteur ligne
+                self._cow_data = COWData(data.reshape(1, -1))  # vecteur ligne
             elif data.ndim == 2:
-                self.data = data
+                self._cow_data = COWData(data)
             else:
                 raise ValueError("Les matrices doivent être 1D ou 2D.")
         elif isinstance(data, list):
             if len(data) == 0:
                 raise ValueError("Liste vide non supportée")
             if isinstance(data[0], list):
-                self.data = np.array(data)
+                self._cow_data = COWData(np.array(data))
             else:
-                self.data = np.array([data])  # vecteur ligne
+                self._cow_data = COWData(np.array([data]))  # vecteur ligne
         else:
-            raise TypeError("Data doit être un np.ndarray, une matrice creuse, ou une liste.")
+            raise TypeError("Data doit être un np.ndarray, une matrice creuse, une Matrix, ou une liste.")
+
+    @property
+    def data(self):
+        """Accès en lecture aux données sous-jacentes."""
+        return self._cow_data.data
 
     @property
     def shape(self):
-        return self.data.shape
+        return self._cow_data.shape
+
+    def copy(self):
+        """
+        Crée une copie indépendante de la Matrix.
+        Utile quand on veut forcer une copie même avec COW.
+        """
+        if isinstance(self._cow_data.data, np.ndarray):
+            return Matrix(self._cow_data.data.copy())
+        elif sp.issparse(self._cow_data.data):
+            return Matrix(self._cow_data.data.copy())
+        else:
+            return Matrix(copy.deepcopy(self._cow_data.data))
 
     def __getitem__(self, key):
         """
-        Accès aux éléments avec support du slicing avancé :
-        - A[i, j] : accès à un élément
-        - A[i] : accès à une ligne (pour matrices) ou élément (pour vecteurs)
-        - A[i:j, k:l] : sous-matrice avec slicing
-        - A[:, j] : colonne j
-        - A[i, :] : ligne i
-        - A[rows, cols] : indexation avancée avec listes/arrays
+        Accès aux éléments avec support du slicing avancé et COW.
         """
         if isinstance(key, tuple):
             # Cas A[row_spec, col_spec]
@@ -91,10 +213,11 @@ class Matrix:
                 return self._advanced_indexing(row_key, col_key)
             
             # Slicing standard
-            if isinstance(self.data, np.ndarray):
-                result = self.data[row_key, col_key]
-            elif sp.issparse(self.data):
-                result = self.data[row_key, col_key]
+            data = self._cow_data.data
+            if isinstance(data, np.ndarray):
+                result = data[row_key, col_key]
+            elif sp.issparse(data):
+                result = data[row_key, col_key]
                 if hasattr(result, 'toarray') and result.shape == (1, 1):
                     # Si c'est un seul élément, retourner le scalaire
                     return result.toarray()[0, 0]
@@ -105,52 +228,63 @@ class Matrix:
             if np.isscalar(result):
                 return result
             
-            # Sinon, encapsuler dans une Matrix
-            return Matrix(result)
+            # Créer une vue COW pour les slices
+            if isinstance(result, np.ndarray) and result.base is not None:
+                # C'est une vue NumPy
+                cow_view = self._cow_data.slice_view((row_key, col_key))
+                return Matrix(cow_view)
+            else:
+                # C'est une copie ou matrice creuse
+                return Matrix(result)
             
         else:
             # Cas A[key] - un seul indice
-            rows, cols = self.data.shape
+            data = self._cow_data.data
+            rows, cols = data.shape
             
             # Pour les vecteurs, accès direct à l'élément
             if rows == 1:  # vecteur ligne
-                if isinstance(self.data, np.ndarray):
-                    result = self.data[0, key]
+                if isinstance(data, np.ndarray):
+                    result = data[0, key]
                 else:  # sparse
-                    result = self.data[0, key]
+                    result = data[0, key]
                     if hasattr(result, 'toarray'):
                         result = result.toarray()[0, 0] if result.shape == (1, 1) else result
-                return result if np.isscalar(result) else Matrix(result)
+                
+                if np.isscalar(result):
+                    return result
+                else:
+                    cow_view = self._cow_data.slice_view((0, key))
+                    return Matrix(cow_view)
                 
             elif cols == 1:  # vecteur colonne
-                if isinstance(self.data, np.ndarray):
-                    result = self.data[key, 0]
+                if isinstance(data, np.ndarray):
+                    result = data[key, 0]
                 else:  # sparse
-                    result = self.data[key, 0]
+                    result = data[key, 0]
                     if hasattr(result, 'toarray'):
                         result = result.toarray()[0, 0] if result.shape == (1, 1) else result
-                return result if np.isscalar(result) else Matrix(result)
+                
+                if np.isscalar(result):
+                    return result
+                else:
+                    cow_view = self._cow_data.slice_view((key, 0))
+                    return Matrix(cow_view)
                 
             else:  # matrice générale - accès à la ligne key
                 if isinstance(key, slice):
                     # Slicing de lignes
-                    if isinstance(self.data, np.ndarray):
-                        result = self.data[key, :]
-                    else:  # sparse
-                        result = self.data[key, :]
-                    return Matrix(result)
+                    cow_view = self._cow_data.slice_view((key, slice(None)))
+                    return Matrix(cow_view)
                 else:
                     # Accès à une ligne spécifique
-                    if isinstance(self.data, np.ndarray):
-                        result = self.data[key, :]
-                    else:  # sparse
-                        result = self.data[key, :]
-                    return Matrix(result)
+                    cow_view = self._cow_data.slice_view((key, slice(None)))
+                    return Matrix(cow_view)
 
     def _advanced_indexing(self, row_key, col_key):
         """
         Gestion de l'indexation avancée avec des listes ou arrays.
-        Exemple: A[[0, 2], [1, 3]] pour extraire les éléments (0,1), (0,3), (2,1), (2,3)
+        L'indexation avancée crée toujours une copie, pas de COW ici.
         """
         # Conversion en arrays numpy si nécessaire
         if isinstance(row_key, list):
@@ -158,12 +292,13 @@ class Matrix:
         if isinstance(col_key, list):
             col_key = np.array(col_key)
             
-        if isinstance(self.data, np.ndarray):
+        data = self._cow_data.data
+        if isinstance(data, np.ndarray):
             # NumPy supporte l'indexation avancée nativement
-            result = self.data[row_key, col_key]
-        elif sp.issparse(self.data):
+            result = data[row_key, col_key]
+        elif sp.issparse(data):
             # Pour les matrices creuses, on utilise l'indexation de scipy
-            result = self.data[row_key, col_key]
+            result = data[row_key, col_key]
         else:
             raise TypeError("Type de matrice non supporté pour l'indexation avancée")
             
@@ -171,13 +306,8 @@ class Matrix:
 
     def __setitem__(self, key, value):
         """
-        Affectation d'éléments avec support du slicing avancé :
-        - A[i, j] = val : affectation d'un élément
-        - A[i] = val : affectation d'une ligne (matrices) ou élément (vecteurs)
-        - A[i:j, k:l] = val : affectation de sous-matrice
-        - A[:, j] = val : affectation d'une colonne
-        - A[i, :] = val : affectation d'une ligne
-        - A[rows, cols] = val : indexation avancée
+        Affectation d'éléments avec Copy-on-Write.
+        Déclenche automatiquement une copie si nécessaire.
         """
         # Conversion et préparation de la valeur
         if isinstance(value, Matrix):
@@ -185,51 +315,9 @@ class Matrix:
         
         # Conversion des formats courants pour compatibilité MATLAB
         value = self._prepare_value_for_assignment(value, key)
-            
-        if isinstance(self.data, np.ndarray):
-            if isinstance(key, tuple):
-                # Cas A[row_spec, col_spec] = value
-                row_key, col_key = key
-                self.data[row_key, col_key] = value
-            else:
-                # Cas A[key] = value
-                rows, cols = self.data.shape
-                if rows == 1:   # vecteur ligne
-                    self.data[0, key] = value
-                elif cols == 1: # vecteur colonne
-                    self.data[key, 0] = value
-                else:           # matrice générale - affectation de ligne(s)
-                    self.data[key, :] = value
-                    
-        elif sp.issparse(self.data):
-            # Pour les matrices creuses, convertir temporairement au format approprié
-            original_format = self.data.getformat()
-            
-            # LIL format est plus efficace pour les modifications
-            if original_format != 'lil':
-                tmp = self.data.tolil()
-            else:
-                tmp = self.data
-                
-            if isinstance(key, tuple):
-                row_key, col_key = key
-                tmp[row_key, col_key] = value
-            else:
-                rows, cols = tmp.shape
-                if rows == 1:
-                    tmp[0, key] = value
-                elif cols == 1:
-                    tmp[key, 0] = value
-                else:
-                    tmp[key, :] = value
-            
-            # Reconvertir au format original si nécessaire
-            if original_format != 'lil':
-                self.data = tmp.asformat(original_format)
-            else:
-                self.data = tmp
-        else:
-            raise TypeError("Type de matrice non supporté pour __setitem__")
+        
+        # Utiliser COW pour l'affectation
+        self._cow_data[key] = value
 
     def _prepare_value_for_assignment(self, value, key):
         """
@@ -279,19 +367,6 @@ class Matrix:
     # --- Produits matriciels ---
     def __matmul__(self, other):
         return self._matmul(other)
-
-    def __mul__(self, other):
-        if isinstance(other, (int, float, complex)):
-            # Multiplication à droite par un scalaire
-            return Matrix(self.data * other)
-        elif isinstance(other, Matrix):
-            # Vérification stricte des dimensions (nb colonnes A == nb lignes B)
-            if self.data.shape[1] != other.data.shape[0]:
-                raise ValueError(f"Dimensions incompatibles pour le produit matriciel : "
-                                f"{self.data.shape} * {other.data.shape}")
-            return Matrix(self.data @ other.data)
-        else:
-            raise TypeError("Multiplication non supportée pour ce type.")
 
     def _matmul(self, other):
         if not isinstance(other, Matrix):
@@ -359,11 +434,13 @@ class Matrix:
         return self.__add__(other)
 
     def __iadd__(self, other):
-        # Addition en place
+        # Addition en place - déclenche COW
         if isinstance(other, Matrix):
-            self.data = self.data + other.data
+            new_data = self._cow_data._ensure_writable() + other.data
+            self._cow_data._data = new_data
         elif _is_scalar(other):
-            self.data = self.data + other
+            new_data = self._cow_data._ensure_writable() + other
+            self._cow_data._data = new_data
         else:
             return NotImplemented
         return self
@@ -389,11 +466,13 @@ class Matrix:
         return NotImplemented
 
     def __isub__(self, other):
-        # Soustraction en place
+        # Soustraction en place - déclenche COW
         if isinstance(other, Matrix):
-            self.data = self.data - other.data
+            new_data = self._cow_data._ensure_writable() - other.data
+            self._cow_data._data = new_data
         elif _is_scalar(other):
-            self.data = self.data - other
+            new_data = self._cow_data._ensure_writable() - other
+            self._cow_data._data = new_data
         else:
             return NotImplemented
         return self
@@ -459,7 +538,6 @@ class Matrix:
         else:
             raise TypeError("Type non supporté pour diag.")
 
-    @staticmethod
     def abs(self):
         """
         Calcule la valeur absolue (module) de chaque élément de la matrice.
@@ -487,21 +565,9 @@ class Matrix:
         """
         return self.abs()
     
-    @staticmethod
     def max(self, dim=None):
         """
         Trouve les éléments maximum d'une matrice/vecteur, à la manière de MATLAB.
-
-        - M = X.max() :
-            * si X est un vecteur -> maximum de tous les éléments (scalaire)
-            * si X est une matrice -> vecteur ligne contenant le maximum par colonne
-            * pour N-D arrays -> maximum le long de la première dimension non-singleton
-
-        - M = X.max(dim) :
-            * maximum le long de la dimension `dim` (0 = lignes, 1 = colonnes, ...)
-        
-        Returns:
-            Matrix ou scalaire: Le ou les éléments maximum
         """
         data = self.data
 
@@ -551,21 +617,9 @@ class Matrix:
         else:
             raise TypeError("Type de matrice non supporté pour max().")
 
-    @staticmethod
     def min(self, dim=None):
         """
         Trouve les éléments minimum d'une matrice/vecteur, à la manière de MATLAB.
-
-        - M = X.min() :
-            * si X est un vecteur -> minimum de tous les éléments (scalaire)
-            * si X est une matrice -> vecteur ligne contenant le minimum par colonne
-            * pour N-D arrays -> minimum le long de la première dimension non-singleton
-
-        - M = X.min(dim) :
-            * minimum le long de la dimension `dim` (0 = lignes, 1 = colonnes, ...)
-        
-        Returns:
-            Matrix ou scalaire: Le ou les éléments minimum
         """
         data = self.data
 
@@ -615,18 +669,9 @@ class Matrix:
         else:
             raise TypeError("Type de matrice non supporté pour min().")
         
-    @staticmethod
     def sum(self, dim=None):
         """
         Somme des éléments d'une matrice/vecteur, à la manière de MATLAB.
-
-        - S = X.sum() :
-            * si X est un vecteur -> somme de tous les éléments (scalaire)
-            * si X est une matrice -> vecteur ligne contenant la somme par colonne
-            * pour N-D arrays -> somme le long de la première dimension non-singleton
-
-        - S = X.sum(dim) :
-            * somme le long de la dimension `dim` (0 = lignes, 1 = colonnes, ...)
         """
         data = self.data
 
@@ -669,7 +714,6 @@ class Matrix:
         else:
             raise TypeError("Type de matrice non supporté pour sum().")
 
-    @staticmethod
     def trace(self):
         """
         Somme des éléments diagonaux de la matrice.
@@ -682,7 +726,6 @@ class Matrix:
         else:
             raise TypeError("Type de matrice non supporté pour trace.")
         
-    @staticmethod
     def det(self):
         """
         Déterminant de la matrice.
@@ -739,6 +782,7 @@ class Matrix:
                     return 1 if self.data.nnz > 0 else 0
                 
                 # Calcul des valeurs singulières
+                from scipy.sparse.linalg import svds
                 singular_values = svds(self.data, k=k, return_singular_vectors=False)
                 
                 # Compter les valeurs singulières non-nulles (avec tolérance)
@@ -758,7 +802,6 @@ class Matrix:
         else:
             raise TypeError("Type de matrice non supporté pour rank.")
    
-    @staticmethod
     def norm(self, ord=2):
         """
         Calcule la norme d'un vecteur ou d'une matrice, à la manière de MATLAB.
@@ -804,7 +847,6 @@ class Matrix:
         else:
             raise TypeError("Type de matrice non supporté pour norm().")
 
-    @staticmethod
     def eig(self, n=None, option='lm'):
         """
         Calcule les valeurs propres et vecteurs propres de la matrice.
@@ -820,7 +862,7 @@ class Matrix:
         Returns:
             (vals, vecs):
                 vals : np.ndarray de taille (n,)
-                vecs : np.ndarray de taille (N, n), chaque colonne est un vecteur propre
+                vecs : Matrix de taille (N, n), chaque colonne est un vecteur propre
         """
         m, k = self.data.shape
         if m != k:
@@ -832,7 +874,7 @@ class Matrix:
 
             # Toutes les valeurs propres demandées
             if n is None or n >= len(vals):
-                return vals, vecs
+                return vals, Matrix(vecs)
 
             # Sélection selon l'option
             if option == 'lm':
@@ -843,7 +885,7 @@ class Matrix:
                 raise ValueError("option doit être 'lm' ou 'sm'.")
 
             idx = idx[:n]
-            return vals[idx], vecs[:, idx]
+            return vals[idx], Matrix(vecs[:, idx])
 
         # --- Matrice creuse ---
         elif sp.issparse(self.data):
@@ -887,19 +929,12 @@ class Matrix:
             
         Returns:
             Matrix: Matrice de zéros
-            
-        Examples:
-            Matrix.zeros(3)        # matrice 3×3 de zéros
-            Matrix.zeros(2, 4)     # matrice 2×4 de zéros
-            Matrix.zeros(3, 3, dtype=int)  # matrice 3×3 d'entiers zéros
-            Matrix.zeros(100, 100, sparse=True)  # matrice creuse 100×100
         """
         if n is None:
             n = m
             
         if sparse:
             # Matrice creuse de zéros (CSR format par défaut)
-            import scipy.sparse as sp
             data = sp.csr_matrix((m, n), dtype=dtype)
             return Matrix(data)
         else:
@@ -911,27 +946,12 @@ class Matrix:
     def ones(m, n=None, dtype=float, sparse=False):
         """
         Crée une matrice de uns, à la manière de MATLAB.
-        
-        Args:
-            m (int): Nombre de lignes
-            n (int, optional): Nombre de colonnes. Si None, crée une matrice carrée m×m
-            dtype (type, optional): Type de données (float, int, complex, etc.)
-            sparse (bool, optional): Si True, crée une matrice creuse (déconseillé pour ones)
-            
-        Returns:
-            Matrix: Matrice de uns
-            
-        Examples:
-            Matrix.ones(3)         # matrice 3×3 de uns
-            Matrix.ones(2, 4)      # matrice 2×4 de uns
-            Matrix.ones(3, 3, dtype=int)  # matrice 3×3 d'entiers uns
         """
         if n is None:
             n = m
             
         if sparse:
             # Matrice creuse de uns (moins efficace, mais possible)
-            import scipy.sparse as sp
             data = sp.csr_matrix(np.ones((m, n), dtype=dtype))
             return Matrix(data)
         else:
@@ -943,30 +963,12 @@ class Matrix:
     def eye(m, n=None, k=0, dtype=float, sparse=False):
         """
         Crée une matrice identité ou avec des uns sur une diagonale, à la manière de MATLAB.
-        
-        Args:
-            m (int): Nombre de lignes
-            n (int, optional): Nombre de colonnes. Si None, crée une matrice carrée m×m
-            k (int, optional): Décalage de la diagonale (0=principale, >0=au-dessus, <0=en-dessous)
-            dtype (type, optional): Type de données (float, int, complex, etc.)
-            sparse (bool, optional): Si True, crée une matrice creuse
-            
-        Returns:
-            Matrix: Matrice identité ou diagonale
-            
-        Examples:
-            Matrix.eye(3)          # matrice identité 3×3
-            Matrix.eye(3, 4)       # matrice 3×4 avec des 1 sur la diagonale principale
-            Matrix.eye(4, k=1)     # matrice 4×4 avec des 1 sur la sur-diagonale
-            Matrix.eye(4, k=-1)    # matrice 4×4 avec des 1 sur la sous-diagonale
-            Matrix.eye(1000, sparse=True)  # matrice identité creuse 1000×1000
         """
         if n is None:
             n = m
             
         if sparse:
             # Matrice creuse identité ou diagonale
-            import scipy.sparse as sp
             if k == 0 and m == n:
                 # Cas spécial: matrice identité carrée
                 data = sp.eye(m, dtype=dtype, format='csr')
@@ -983,22 +985,6 @@ class Matrix:
     def rand(m, n=None, dtype=float, sparse=False, density=0.1, random_state=None):
         """
         Crée une matrice de nombres aléatoires uniformes entre 0 et 1, à la manière de MATLAB.
-        
-        Args:
-            m (int): Nombre de lignes
-            n (int, optional): Nombre de colonnes. Si None, crée une matrice carrée m×m
-            dtype (type, optional): Type de données (float, complex, etc.)
-            sparse (bool, optional): Si True, crée une matrice creuse
-            density (float, optional): Densité pour matrices creuses (proportion d'éléments non-nuls)
-            random_state (int, optional): Graine pour la génération aléatoire
-            
-        Returns:
-            Matrix: Matrice de nombres aléatoires
-            
-        Examples:
-            Matrix.rand(3)         # matrice 3×3 aléatoire
-            Matrix.rand(2, 4)      # matrice 2×4 aléatoire
-            Matrix.rand(100, 100, sparse=True, density=0.05)  # matrice creuse avec 5% d'éléments
         """
         if n is None:
             n = m
@@ -1008,7 +994,6 @@ class Matrix:
             
         if sparse:
             # Matrice creuse aléatoire
-            import scipy.sparse as sp
             data = sp.random(m, n, density=density, format='csr', dtype=dtype, random_state=random_state)
             return Matrix(data)
         else:
@@ -1026,21 +1011,6 @@ class Matrix:
     def randn(m, n=None, dtype=float, sparse=False, density=0.1, random_state=None):
         """
         Crée une matrice de nombres aléatoires suivant une distribution normale (0, 1).
-        
-        Args:
-            m (int): Nombre de lignes
-            n (int, optional): Nombre de colonnes. Si None, crée une matrice carrée m×m
-            dtype (type, optional): Type de données (float, complex, etc.)
-            sparse (bool, optional): Si True, crée une matrice creuse avec distribution normale
-            density (float, optional): Densité pour matrices creuses
-            random_state (int, optional): Graine pour la génération aléatoire
-            
-        Returns:
-            Matrix: Matrice de nombres aléatoires gaussiens
-            
-        Examples:
-            Matrix.randn(3)        # matrice 3×3 gaussienne
-            Matrix.randn(2, 4)     # matrice 2×4 gaussienne
         """
         if n is None:
             n = m
@@ -1050,7 +1020,6 @@ class Matrix:
             
         if sparse:
             # Pour les matrices creuses, on génère d'abord une matrice dense puis on la rend creuse
-            import scipy.sparse as sp
             if dtype == complex:
                 real_part = np.random.randn(m, n)
                 imag_part = np.random.randn(m, n)
@@ -1071,11 +1040,8 @@ class Matrix:
                 data = real_part + 1j * imag_part
             else:
                 data = np.random.randn(m, n).astype(dtype)
-                print(data)
-                print('='*20)
             return Matrix(data)
 
-    @staticmethod
     def cos(self):
         """
         Applique la fonction cosinus élément par élément à la matrice.
@@ -1090,14 +1056,14 @@ class Matrix:
             data_coo = data.tocoo()
             new_data = np.cos(data_coo.data)
             from scipy.sparse import coo_matrix
-            return Matrix(coo_matrix((new_data, (data_coo.row, data_coo.col)), shape=data.shape).asformat(data.getformat()))
+            return Matrix(coo_matrix((new_data, (data_coo.row, data_coo.col)), 
+                                     shape=data.shape).asformat(data.getformat()))
         else:
             raise TypeError("Type de matrice non supporté pour cos().")
      
-    @staticmethod   
     def sin(self):
         """
-        Applique la fonction sininus élément par élément à la matrice.
+        Applique la fonction sinus élément par élément à la matrice.
         Équivaut à MATLAB : sin(A)
         """
         data = self.data
@@ -1109,14 +1075,14 @@ class Matrix:
             data_coo = data.tocoo()
             new_data = np.sin(data_coo.data)
             from scipy.sparse import coo_matrix
-            return Matrix(coo_matrix((new_data, (data_coo.row, data_coo.col)), shape=data.shape).asformat(data.getformat()))
+            return Matrix(coo_matrix((new_data, (data_coo.row, data_coo.col)), 
+                                     shape=data.shape).asformat(data.getformat()))
         else:
             raise TypeError("Type de matrice non supporté pour sin().")
  
-    @staticmethod
     def tan(self):
         """
-        Applique la fonction taninus élément par élément à la matrice.
+        Applique la fonction tangente élément par élément à la matrice.
         Équivaut à MATLAB : tan(A)
         """
         data = self.data
@@ -1128,11 +1094,11 @@ class Matrix:
             data_coo = data.tocoo()
             new_data = np.tan(data_coo.data)
             from scipy.sparse import coo_matrix
-            return Matrix(coo_matrix((new_data, (data_coo.row, data_coo.col)), shape=data.shape).asformat(data.getformat()))
+            return Matrix(coo_matrix((new_data, (data_coo.row, data_coo.col)), 
+                                     shape=data.shape).asformat(data.getformat()))
         else:
             raise TypeError("Type de matrice non supporté pour tan().")
     
-    @staticmethod           
     def exp(self):
         """
         Applique la fonction exp élément par élément à la matrice.
@@ -1140,18 +1106,18 @@ class Matrix:
         """
         data = self.data
 
-        if iexpstance(data, np.ndarray):
+        if isinstance(data, np.ndarray):
             return Matrix(np.exp(data))
         elif sp.issparse(data):
             # appliquer exp élément par élément sur les valeurs non nulles
             data_coo = data.tocoo()
             new_data = np.exp(data_coo.data)
             from scipy.sparse import coo_matrix
-            return Matrix(coo_matrix((new_data, (data_coo.row, data_coo.col)), shape=data.shape).asformat(data.getformat()))
+            return Matrix(coo_matrix((new_data, (data_coo.row, data_coo.col)), 
+                                     shape=data.shape).asformat(data.getformat()))
         else:
             raise TypeError("Type de matrice non supporté pour exp().")
   
-    @staticmethod
     def acos(self):
         """
         Applique la fonction arccos (acos) élément par élément à la matrice.
@@ -1166,11 +1132,11 @@ class Matrix:
             data_coo = data.tocoo()
             new_data = np.arccos(data_coo.data)
             from scipy.sparse import coo_matrix
-            return Matrix(coo_matrix((new_data, (data_coo.row, data_coo.col)), shape=data.shape).asformat(data.getformat()))
+            return Matrix(coo_matrix((new_data, (data_coo.row, data_coo.col)), 
+                                     shape=data.shape).asformat(data.getformat()))
         else:
             raise TypeError("Type de matrice non supporté pour acos().")
 
-    @staticmethod
     def asin(self):
         """
         Applique la fonction arcsin (asin) élément par élément à la matrice.
@@ -1185,11 +1151,11 @@ class Matrix:
             data_coo = data.tocoo()
             new_data = np.arcsin(data_coo.data)
             from scipy.sparse import coo_matrix
-            return Matrix(coo_matrix((new_data, (data_coo.row, data_coo.col)), shape=data.shape).asformat(data.getformat()))
+            return Matrix(coo_matrix((new_data, (data_coo.row, data_coo.col)), 
+                                     shape=data.shape).asformat(data.getformat()))
         else:
             raise TypeError("Type de matrice non supporté pour asin().")
 
-    @staticmethod
     def atan(self):
         """
         Applique la fonction arctan (atan) élément par élément à la matrice.
@@ -1239,7 +1205,8 @@ class Matrix:
 
             new_data = np.arctan2(Ycoo.data, Xcoo.data)
             from scipy.sparse import coo_matrix
-            return Matrix(coo_matrix((new_data, (Ycoo.row, Ycoo.col)), shape=Yd.shape).asformat(Yd.getformat()))
+            return Matrix(coo_matrix((new_data, (Ycoo.row, Ycoo.col)), 
+                                     shape=Yd.shape).asformat(Yd.getformat()))
 
         else:
             raise TypeError("Types non supportés pour atan2.")
@@ -1258,7 +1225,7 @@ class Matrix:
         """
         Résout Ax = b pour x.
         """
-        if not (isinstance(b, Matrix)):
+        if not isinstance(b, Matrix):
             raise TypeError("b doit être un objet Matrix")
 
         if sp.issparse(self.data):
@@ -1278,16 +1245,163 @@ class Matrix:
         """Partie imaginaire de la matrice"""
         return Matrix(self.data.imag)
     
+    def is_cow_active(self):
+        """
+        Vérifie si le Copy-on-Write est actif pour cette matrice.
+        
+        Returns:
+            dict: Informations sur l'état COW
+        """
+        return {
+            'is_view': self._cow_data._is_view,
+            'has_children': len(self._cow_data._children) > 0,
+            'is_modified': self._cow_data._is_modified,
+            'children_count': len(self._cow_data._children),
+            'has_parent': self._cow_data._parent_ref is not None
+        }
+    
+    def copy(self):
+        """
+        Force une copie des données, même si COW est actif.
+        Utile pour optimiser quand on sait qu'on va faire beaucoup de modifications.
+        """
+        self._cow_data._ensure_writable()
+        return self
+    
     def __str__(self):
         return str(self.data)
 
     def __repr__(self):
-        return f"Matrix({repr(self.data)})"
-      
+        cow_info = self.is_cow_active()
+        status = "COW" if cow_info['is_view'] or cow_info['has_children'] else "own"
+        return f"Matrix({status}):\n{repr(self.data)}"
+
+
 # -----------------------
-# Exemple d'utilisation
+# Fonctions utilitaires pour COW
 # -----------------------
+def memory_usage_info(matrices):
+    """
+    Affiche des informations sur l'utilisation mémoire des matrices avec COW.
+    
+    Args:
+        matrices (list): Liste de matrices à analyser
+    """
+    print("=== Analyse de l'utilisation mémoire COW ===")
+    
+    total_matrices = len(matrices)
+    total_data_objects = len(set(id(m._cow_data._data) for m in matrices))
+    memory_saved = total_matrices - total_data_objects
+    
+    print(f"Nombre total de matrices: {total_matrices}")
+    print(f"Nombre d'objets de données distincts: {total_data_objects}")
+    print(f"Économie mémoire (objets partagés): {memory_saved}")
+    print(f"Ratio de partage: {memory_saved/total_matrices*100:.1f}%")
+    
+    for i, m in enumerate(matrices):
+        info = m.is_cow_active()
+        status = "VIEW" if info['is_view'] else ("SHARED" if info['has_children'] else "OWN")
+        print(f"Matrix[{i}]: {status}, enfants: {info['children_count']}, modifiée: {info['is_modified']}")
+
+
+# -----------------------
+# Exemple d'utilisation avec COW
+# -----------------------
+def demonstrate_cow():
+    """
+    Démontre les avantages du Copy-on-Write.
+    """
+    print("=== Démonstration Copy-on-Write ===")
+    
+    # Création d'une matrice de base
+    A = Matrix.rand(1000, 1000)
+    print(f"Matrice A créée: {A.shape}")
+    
+    # Création de copies avec COW
+    B = Matrix(A)  # Partage les données
+    C = Matrix(A)  # Partage aussi les données
+    D = A[100:200, 100:200]  # Vue sur une sous-région
+    
+    print("\nÉtat après création des copies:")
+    memory_usage_info([A, B, C, D])
+    
+    # Modification de B - déclenche COW
+    print("\nModification de B[0, 0] = 999...")
+    B[0, 0] = 999
+    
+    print("État après modification de B:")
+    memory_usage_info([A, B, C, D])
+    
+    # Vérification que A et C ne sont pas affectées
+    print(f"\nA[0, 0] = {A[0, 0]} (inchangé)")
+    print(f"B[0, 0] = {B[0, 0]} (modifié)")
+    print(f"C[0, 0] = {C[0, 0]} (inchangé)")
+    
+    return A, B, C, D
+
+def cg(A, b, tol=1.0e-6):
+    sz = A.shape
+    assert sz[0] == sz[1]
+    x = Matrix.rand(sz[0], 1, random_state = 42)
+    r = b-A*x
+    p = r
+    k=0
+    while (Matrix.norm(r) > tol * Matrix.norm(b)):
+        k += 1
+        a = p.H* r /(p.H*A*p)
+        x += a*p
+        r = b-A*x
+        beta = -p.H*A*r /(p.H*A*p)
+        p = r + beta*p
+    return x, k
+
+def test_COW():
+    N = 10
+    p = Matrix.rand(1, N, random_state = 42)
+    r = Matrix(p)
+    print(p)
+    print(r)
+    p += 2*r
+    print('-'*5)
+    print(p)
+    print(r)
+                
 if __name__ == "__main__":
+    # Test de base avec COW
+    print("=== Tests de base MatLite avec COW ===")
+    
+    # Création depuis np.ndarray
+    A = Matrix(np.array([[3., 2.], [1., 2.]]))
+    # Création depuis liste de liste
+    B = Matrix([[1.], [2.]])
+    
+    print("A =\n", A)
+    print("B =\n", B)
+    print("Info COW A:", A.is_cow_active())
+    
+    # Test de copie COW
+    C = Matrix(A)  # Partage les données
+    print("Info COW C (copie de A):", C.is_cow_active())
+    
+    # Produit matriciel (crée une nouvelle matrice)
+    result = A * B
+    print("A * B =\n", result)
+    
+    # Test de modification avec COW
+    print("\n=== Test modification avec COW ===")
+    print("Avant modification C[0,0]:")
+    print("A[0,0] =", A[0, 0])
+    print("C[0,0] =", C[0, 0])
+    
+    C[0, 0] = 99  # Déclenche COW
+    print("Après C[0,0] = 99:")
+    print("A[0,0] =", A[0, 0], "(inchangé)")
+    print("C[0,0] =", C[0, 0], "(modifié)")
+    
+    # Démonstration complète
+    print("\n" + "="*50)
+    demonstrate_cow()
+    
     # Création depuis np.ndarray
     A = Matrix(np.array([[3., 2.], [1., 2.]]))
     # Création depuis liste de liste
@@ -1334,3 +1448,56 @@ if __name__ == "__main__":
     print("Solution système A x = B :\n", x)
     x = Matrix.backslash(A, B)
     print("Solution système A x = B :\n", x)
+    
+    # Création de matrices
+    A = Matrix([[1, 2, 3], [4, 5, 6]])        # Depuis une liste
+    B = Matrix(np.random.randn(3, 2))          # Depuis un array NumPy
+    C = Matrix.eye(3)                          # Matrice identité 3x3
+    D = Matrix.rand(5, 5, sparse=True)         # Matrice creuse aléatoire
+
+    # Opérations matricielles
+    result = A * B                             # Produit matriciel
+    transposed = A.H                           # Transposée conjuguée
+    norm_val = Matrix.norm(A)                  # Norme matricielle
+
+    # Indexation MATLAB-like
+    A[0, 1] = 10                              # Modification d'un élément
+    row = A[0, :]                             # Extraction d'une ligne
+    col = A[:, 1]                             # Extraction d'une colonne
+
+    # Résolution de système linéaire Ax = B
+    print(A*B)
+    x = Matrix.backslash(A * A.H, A * B)    # Moindres carrés
+    print(x)
+    
+    A = Matrix(np.array([[3., 1.],
+                         [1., 2.]]))
+    B = Matrix(np.array([[1.],
+                         [2.]]))
+    
+    N = 100
+    A = Matrix.rand(N, N, random_state = 42)
+    A = A + A.H + N*Matrix.eye(N)
+    B = Matrix.rand(N, 1, random_state = 42)
+    x, iter = cg(A, B)
+    print(f'iterations : {iter} residu : {Matrix.norm(B-A*x, np.inf)}')
+    
+    test_COW()
+    print('-'*20)
+    import time
+
+    A = Matrix.rand(2000, 2000)  # ~32MB
+
+    # Test COW
+    start = time.time()
+    B = Matrix(A)  # COW
+    print(f"COW: {time.time() - start:.2g}s")  # ~0.000001s
+    print(Matrix.max(B-A))
+    
+    # Test copie immédiate
+    start = time.time() 
+    C = A.copy()  # Vraie copie
+    print(f"Force copy: {time.time() - start:.2g}s")  # ~0.1s
+
+    # Modification → COW se déclenche automatiquement
+    B[0, 0] = 999  # Première modif → copie automatique
