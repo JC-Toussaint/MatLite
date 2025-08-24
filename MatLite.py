@@ -1523,4 +1523,4 @@ if __name__ == "__main__":
     # Modification → COW se déclenche automatiquement
     B[0, 0] = 999  # Première modif → copie automatique
     
-    print(Matrix.cos(A))
+    print(Matrix.abs(A))

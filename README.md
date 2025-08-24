@@ -180,12 +180,12 @@ rank_val = A.rank                        # Rang (propriété)
 A = Matrix.rand(3, 3) * 2 - 1  # Valeurs dans [-1, 1]
 
 # Fonctions trigonométriques
-sin_A = A.sin()
+sin_A = A.sin() ou sin_A = Matrix.sin(A)
 cos_A = A.cos()  
 tan_A = A.tan()
 
 # Fonctions trigonométriques inverses
-asin_A = A.asin()
+asin_A = A.asin() ou asin_A = Matrix.asin(A)
 acos_A = A.acos()
 atan_A = A.atan()
 
@@ -193,8 +193,8 @@ atan_A = A.atan()
 angle = Matrix.atan2(A[:, 0], A[:, 1])   # Angle en coordonnées polaires
 
 # Autres fonctions
-abs_A = A.abs()                          # Valeur absolue
-exp_A = A.exp()                          # Exponentielle
+abs_A = A.abs()  ou abs_A = Matrix.abs(A) # Valeur absolue
+exp_A = A.exp()                           # Exponentielle
 
 # Matrices complexes
 A_complex = Matrix.randn(3, 3, dtype=complex)
@@ -208,9 +208,9 @@ imag_part = A_complex.imag               # Partie imaginaire
 A = Matrix.randn(4, 5)
 
 # Réductions par défaut (première dimension non-singleton, comme MATLAB)
-max_val = A.max()                        # Maximum par colonne → vecteur ligne 1x5
-min_val = A.min()                        # Minimum par colonne → vecteur ligne 1x5  
-sum_val = A.sum()                        # Somme par colonne → vecteur ligne 1x5
+max_val = A.max()  ou max_val = Matrix.max(A) # Maximum par colonne → vecteur ligne 1x5
+min_val = A.min()                             # Minimum par colonne → vecteur ligne 1x5  
+sum_val = A.sum()                             # Somme par colonne → vecteur ligne 1x5
 
 # Réductions avec dimension spécifiée
 max_rows = A.max(dim=1)                  # Maximum par ligne → vecteur colonne 4x1
