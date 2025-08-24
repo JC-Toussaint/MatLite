@@ -1042,6 +1042,7 @@ class Matrix:
                 data = np.random.randn(m, n).astype(dtype)
             return Matrix(data)
 
+    @staticmethod
     def cos(self):
         """
         Applique la fonction cosinus élément par élément à la matrice.
@@ -1061,6 +1062,7 @@ class Matrix:
         else:
             raise TypeError("Type de matrice non supporté pour cos().")
      
+    @staticmethod
     def sin(self):
         """
         Applique la fonction sinus élément par élément à la matrice.
@@ -1079,7 +1081,8 @@ class Matrix:
                                      shape=data.shape).asformat(data.getformat()))
         else:
             raise TypeError("Type de matrice non supporté pour sin().")
- 
+
+    @staticmethod
     def tan(self):
         """
         Applique la fonction tangente élément par élément à la matrice.
@@ -1099,6 +1102,7 @@ class Matrix:
         else:
             raise TypeError("Type de matrice non supporté pour tan().")
     
+    @staticmethod
     def exp(self):
         """
         Applique la fonction exp élément par élément à la matrice.
@@ -1118,6 +1122,7 @@ class Matrix:
         else:
             raise TypeError("Type de matrice non supporté pour exp().")
   
+    @staticmethod
     def acos(self):
         """
         Applique la fonction arccos (acos) élément par élément à la matrice.
@@ -1137,6 +1142,7 @@ class Matrix:
         else:
             raise TypeError("Type de matrice non supporté pour acos().")
 
+    @staticmethod
     def asin(self):
         """
         Applique la fonction arcsin (asin) élément par élément à la matrice.
@@ -1156,6 +1162,7 @@ class Matrix:
         else:
             raise TypeError("Type de matrice non supporté pour asin().")
 
+    @staticmethod
     def atan(self):
         """
         Applique la fonction arctan (atan) élément par élément à la matrice.
@@ -1516,7 +1523,4 @@ if __name__ == "__main__":
     # Modification → COW se déclenche automatiquement
     B[0, 0] = 999  # Première modif → copie automatique
     
-    p = np.array([1, 2, 3])
-    r = p
-    p += 2*r
-    print(p, r)
+    print(Matrix.cos(A))
