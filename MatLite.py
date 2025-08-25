@@ -1398,7 +1398,17 @@ class Matrix:
 
         else:
             raise TypeError("Types non supportés pour atan2.")
-                               
+
+    # --- Transposée ---
+    @property
+    def T(self):
+        if isinstance(self.data, np.ndarray):
+            return Matrix(self.data.T)
+        elif issparse(self.data):
+            return Matrix(self.data.getT())
+        else:
+            raise TypeError("Type de matrice non supporté pour T.")
+                                       
     # --- Transposée Hermitienne ---
     @property
     def H(self):
@@ -1710,3 +1720,15 @@ if __name__ == "__main__":
                          [1., 2.]]))
     print(A**2)
     print(A^2)
+    
+    lst=[]
+    lst.append(A)
+    A=2*A
+    lst.append(A)
+    print(lst[0])
+    print(lst[1])
+    
+    A = Matrix(np.array([[3., 2.],
+                         [1., 2.]]))
+    print(A.is_cow_active())
+    print(A.T)
