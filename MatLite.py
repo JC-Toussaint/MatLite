@@ -487,7 +487,188 @@ class Matrix:
         else:
             # Si la matrice est dense, appliquer la négation normalement
             return Matrix(-self.data)
+
+    def __xor__(self, n):
+        """
+        Surcharge de l'opérateur ^ pour calculer la puissance matricielle A^n.
         
+        Calcule le produit matriciel de A répété n fois : A * A * ... * A (n fois)
+        
+        Args:
+            n (int): Exposant (doit être un entier positif ou nul)
+            
+        Returns:
+            Matrix: Résultat de A^n
+            
+        Raises:
+            ValueError: Si la matrice n'est pas carrée ou si n < 0
+            TypeError: Si n n'est pas un entier
+            
+        Examples:
+            A = Matrix([[2, 1], [1, 1]])
+            A2 = A ^ 2  # Équivaut à A * A
+            A3 = A ^ 3  # Équivaut à A * A * A
+        """
+        # Vérification du type de l'exposant
+        if not isinstance(n, int):
+            raise TypeError("L'exposant doit être un entier.")
+        
+        if n < 0:
+            raise ValueError("L'exposant doit être positif ou nul.")
+        
+        # Vérification que la matrice est carrée
+        rows, cols = self.shape
+        if rows != cols:
+            raise ValueError("La puissance matricielle n'est définie que pour les matrices carrées.")
+        
+        # Cas particuliers
+        if n == 0:
+            # A^0 = I (matrice identité)
+            if isinstance(self.data, np.ndarray):
+                return Matrix.eye(rows, dtype=self.data.dtype)
+            elif sp.issparse(self.data):
+                return Matrix.eye(rows, dtype=self.data.dtype, sparse=True)
+        
+        if n == 1:
+            # A^1 = A (copie avec COW)
+            return Matrix(self)
+        
+        # Algorithme d'exponentiation rapide pour optimiser les grandes puissances
+        result = Matrix.eye(rows, dtype=self.data.dtype, 
+                        sparse=sp.issparse(self.data))
+        base = Matrix(self)  # Copie COW de la matrice de base
+        
+        while n > 0:
+            if n % 2 == 1:
+                result = result * base
+            base = base * base
+            n //= 2
+        
+        return result
+ 
+    def __pow__(self, exponent):
+        """
+        Surcharge de l'opérateur ** pour calculer la puissance élément par élément A**n.
+        
+        Calcule chaque élément de la matrice élevé à la puissance n : [A[i,j]^n]
+        Équivaut à l'opération MATLAB : A.^n
+        
+        Args:
+            exponent (scalar | Matrix): Exposant 
+                - Si scalaire : applique la même puissance à tous les éléments
+                - Si Matrix : puissance élément par élément (broadcasting supporté)
+            
+        Returns:
+            Matrix: Résultat avec chaque élément élevé à la puissance correspondante
+            
+        Examples:
+            A = Matrix([[2, 3], [4, 5]])
+            A2 = A ** 2        # [[4, 9], [16, 25]]
+            A_half = A ** 0.5  # [[√2, √3], [2, √5]]
+            
+            # Avec une matrice d'exposants
+            exp = Matrix([[2, 3], [1, 2]])
+            result = A ** exp  # [[2^2, 3^3], [4^1, 5^2]] = [[4, 27], [4, 25]]
+        """
+        data = self.data
+        
+        # Cas exposant scalaire
+        if np.isscalar(exponent):
+            if isinstance(data, np.ndarray):
+                return Matrix(np.power(data, exponent))
+            elif sp.issparse(data):
+                # Pour les matrices creuses, appliquer power aux éléments non-nuls
+                data_coo = data.tocoo()
+                new_data = np.power(data_coo.data, exponent)
+                from scipy.sparse import coo_matrix
+                result = coo_matrix((new_data, (data_coo.row, data_coo.col)), 
+                                shape=data.shape).asformat(data.getformat())
+                return Matrix(result)
+            else:
+                raise TypeError("Type de matrice non supporté pour __pow__.")
+        
+        # Cas exposant Matrix
+        elif isinstance(exponent, Matrix):
+            exp_data = exponent.data
+            
+            # Matrices denses
+            if isinstance(data, np.ndarray) and isinstance(exp_data, np.ndarray):
+                return Matrix(np.power(data, exp_data))
+            
+            # Matrices creuses
+            elif sp.issparse(data) and sp.issparse(exp_data):
+                # Vérifier que les patterns de sparsité sont compatibles
+                data_coo = data.tocoo()
+                exp_coo = exp_data.tocoo()
+                
+                # Pour simplifier, on convertit en dense si les formes sont petites
+                if np.prod(data.shape) <= 10000:  # seuil arbitraire
+                    return Matrix(np.power(data.toarray(), exp_data.toarray()))
+                else:
+                    # Pour les grandes matrices, on suppose des patterns identiques
+                    if not (np.array_equal(data_coo.row, exp_coo.row) and 
+                        np.array_equal(data_coo.col, exp_coo.col)):
+                        raise ValueError("Les patterns de sparsité doivent coïncider pour ** avec matrices creuses.")
+                    
+                    new_data = np.power(data_coo.data, exp_coo.data)
+                    from scipy.sparse import coo_matrix
+                    result = coo_matrix((new_data, (data_coo.row, data_coo.col)), 
+                                    shape=data.shape).asformat(data.getformat())
+                    return Matrix(result)
+            
+            # Cas mixte (dense/sparse)
+            elif isinstance(data, np.ndarray) and sp.issparse(exp_data):
+                return Matrix(np.power(data, exp_data.toarray()))
+            elif sp.issparse(data) and isinstance(exp_data, np.ndarray):
+                return Matrix(np.power(data.toarray(), exp_data))
+            
+            else:
+                raise TypeError("Types de matrices non compatibles pour __pow__.")
+        
+        # Cas exposant array numpy ou liste
+        elif isinstance(exponent, (np.ndarray, list)):
+            exp_array = np.array(exponent) if isinstance(exponent, list) else exponent
+            
+            if isinstance(data, np.ndarray):
+                return Matrix(np.power(data, exp_array))
+            elif sp.issparse(data):
+                return Matrix(np.power(data.toarray(), exp_array))
+            else:
+                raise TypeError("Type de matrice non supporté pour __pow__.")
+        
+        else:
+            raise TypeError(f"Type d'exposant non supporté: {type(exponent)}")
+
+    def __rpow__(self, base):
+        """
+        Surcharge de l'opérateur ** pour le cas base ** Matrix.
+        
+        Calcule base élevé à chaque élément de la matrice : [base^A[i,j]]
+        
+        Args:
+            base (scalar): Base de la puissance
+            
+        Returns:
+            Matrix: Résultat avec base élevé à chaque élément de A
+            
+        Example:
+            A = Matrix([[1, 2], [3, 4]])
+            result = 2 ** A  # [[2^1, 2^2], [2^3, 2^4]] = [[2, 4], [8, 16]]
+        """
+        if not np.isscalar(base):
+            raise TypeError("La base doit être un scalaire pour base ** Matrix.")
+        
+        data = self.data
+        
+        if isinstance(data, np.ndarray):
+            return Matrix(np.power(base, data))
+        elif sp.issparse(data):
+            # Pour les matrices creuses, appliquer à tous les éléments
+            # Note: cela peut créer une matrice dense si base != 0
+            return Matrix(np.power(base, data.toarray()))
+        else:
+            raise TypeError("Type de matrice non supporté pour __rpow__.")
+           
     @staticmethod
     def diag(obj, k=0):
         """
@@ -1524,3 +1705,8 @@ if __name__ == "__main__":
     B[0, 0] = 999  # Première modif → copie automatique
     
     print(Matrix.abs(A))
+    print('-'*20)
+    A = Matrix(np.array([[3., 1.],
+                         [1., 2.]]))
+    print(A**2)
+    print(A^2)
