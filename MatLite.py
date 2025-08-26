@@ -1405,7 +1405,7 @@ class Matrix:
         if isinstance(self.data, np.ndarray):
             return Matrix(self.data.T)
         elif issparse(self.data):
-            return Matrix(self.data.getT())
+            return Matrix(self.data.T)
         else:
             raise TypeError("Type de matrice non supporté pour T.")
                                        
@@ -1732,3 +1732,34 @@ if __name__ == "__main__":
                          [1., 2.]]))
     print(A.is_cow_active())
     print(A.T)
+    
+    B = Matrix(A)
+    print(B.is_cow_active())
+    
+    C=A
+    print(C.is_cow_active())
+    
+    x=A.backslash(B)
+    print(x)
+    
+    print('='*20)
+    A =np.array([1., 2.])
+    lst=[]
+    lst.append(A)
+    print(id(A))
+    A *= 2
+    lst.append(A)
+    print(id(A))
+    print(lst[0])
+    print(lst[1])
+    
+    print('-'*20)
+    A =Matrix([1., 2.])
+    lst=[]
+    lst.append(A)
+    print(id(A.data))
+    A *= 2
+    lst.append(A)
+    print(id(A.data))
+    print(lst[0])
+    print(lst[1])
