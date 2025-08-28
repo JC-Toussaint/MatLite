@@ -1820,3 +1820,8 @@ if __name__ == "__main__":
     print(id(A.data))
     print(lst[0])
     print(lst[1])
+    
+    v = Matrix([[1], [2], [3]])
+    max_scalar = v.max(1)
+    print(v.shape)
+    print(max_scalar)

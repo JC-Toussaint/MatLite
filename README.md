@@ -25,6 +25,37 @@ MatLite fournit une classe `Matrix` qui encapsule les matrices NumPy et SciPy.sp
 - ✅ **Fonctions de diagnostic COW** pour l'analyse mémoire
 - ✅ **Support complet des nombres complexes**
 
+
+<!-- NOUVEAUTES_MATLITE_BEGIN -->
+## ✨ Nouvelles fonctionnalités
+
+Les ajouts récents détectés dans `MatLite.py` (sans modifier le reste du README) :
+
+- Démo intégrée du mécanisme Copy-on-Write `demonstrate_cow()`
+- Fonction `Matrix.atan2(Y, X)` (à deux arguments)
+- Fonction globale `backslash(A, b)` pour résoudre `A x = b` (dense/creux)
+- Opérations **en place** avec COW: `+=`
+- Opérations **en place** avec COW: `-=`
+- Outil de diagnostic mémoire `memory_usage_info([...])` (COW)
+- Produit matriciel avec `@` (Python) en plus de `*`
+- Propriété `imag` (partie imaginaire)
+- Propriété `real` (partie réelle)
+- Puissance **élément par élément** via `A ** n` (équivalent MATLAB `A.^n`)
+- Puissance matricielle via `A ^ n` (équivalent MATLAB `A^n`)
+- Puissance scalaire à la matrice: `c ** A`
+- Résolution de système linéaire avec `A // b` (équivalent MATLAB `A \ b`)
+- `cos` élément par élément
+- `diag` pour créer/extraire des diagonales
+- `eig` avec support dense/creux et options
+- `exp` élément par élément
+- `max` compatible MATLAB (réduction par défaut)
+- `min` compatible MATLAB (réduction par défaut)
+- `norm` (2, inf, 'fro')
+- `sin` élément par élément
+- `sum` compatible MATLAB (réduction par défaut)
+- `tan` élément par élément
+<!-- NOUVEAUTES_MATLITE_END -->
+
 ## Installation
 
 ```bash
@@ -434,8 +465,12 @@ MatLite reproduit fidèlement le comportement de MATLAB avec des extensions :
 | `real(A)` | `A.real` | **Partie réelle (nouveau)** |
 | `imag(A)` | `A.imag` | **Partie imaginaire (nouveau)** |
 | `atan2(Y,X)` | `Matrix.atan2(Y, X)` | **Fonction atan2 (nouveau)** |
-
-## Performance et optimisation mémoire
+| `A^n`           | `A ^ n`                | Puissance matricielle |
+| `A.^n`          | `A ** n`               | Puissance élément par élément |
+| `c.^A`          | `c ** A`               | Scalaire à la puissance matrice |
+| `exp(A)`        | `A.exp()`              | Exponentielle élément par élément |
+| `tan(A)`        | `A.tan()`              | Tangente élément par élément |
+| `A \ b`        | `A // b`               | Résolution de système linéaire (opérateur) |## Performance et optimisation mémoire
 
 ### Comparaison avec/sans COW
 
