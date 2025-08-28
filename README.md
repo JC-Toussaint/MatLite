@@ -42,7 +42,6 @@ Les ajouts récents détectés dans `MatLite.py` (sans modifier le reste du REA
 - Propriété `real` (partie réelle)
 - Puissance **élément par élément** via `A ** n` (équivalent MATLAB `A.^n`)
 - Puissance matricielle via `A ^ n` (équivalent MATLAB `A^n`)
-- Puissance scalaire à la matrice: `c ** A`
 - Résolution de système linéaire avec `A // b` (équivalent MATLAB `A \ b`)
 - `cos` élément par élément
 - `diag` pour créer/extraire des diagonales
