@@ -668,7 +668,64 @@ class Matrix:
             return Matrix(np.power(base, data.toarray()))
         else:
             raise TypeError("Type de matrice non supporté pour __rpow__.")
-           
+    
+    def __floordiv__(self, other):
+        """
+        Surcharge de l'opérateur // pour résoudre A x = b.
+        Équivaut à MATLAB : A \ b
+        """
+        return self.backslash(other)
+
+    def __rfloordiv__(self, other):
+        """
+        Cas où l'opérateur est utilisé comme b // A (non MATLAB-like).
+        On lève une erreur explicite.
+        """
+        raise TypeError("L'opérateur // est défini uniquement comme A // b (équivalent à A \\ b en MATLAB).")
+
+    @staticmethod
+    def cat(dim, *arrays):
+        """
+        Concatène plusieurs matrices le long de la dimension spécifiée.
+        Version Python/NumPy (indexation à 0) :
+
+            dim = 0  → concaténation verticale (ajout de lignes)
+            dim = 1  → concaténation horizontale (ajout de colonnes)
+            dim > 1  → concaténation sur des dimensions supérieures
+
+        Args:
+            dim (int): Dimension (axis NumPy) le long de laquelle concaténer.
+            *arrays (Matrix | np.ndarray | list): Matrices/vecteurs à concaténer.
+
+        Returns:
+            Matrix: Matrice résultante.
+        """
+        # Conversion en np.ndarray ou sparse
+        datas = []
+        for arr in arrays:
+            if isinstance(arr, Matrix):
+                datas.append(arr.data)
+            elif isinstance(arr, np.ndarray) or sp.issparse(arr):
+                datas.append(arr)
+            elif isinstance(arr, list):
+                datas.append(np.array(arr))
+            else:
+                raise TypeError(f"Type non supporté pour concaténation: {type(arr)}")
+
+        # Gestion sparse vs dense
+        if any(sp.issparse(d) for d in datas):
+            datas = [sp.csr_matrix(d) if not sp.issparse(d) else d for d in datas]
+            if dim == 0:
+                result = sp.vstack(datas)
+            elif dim == 1:
+                result = sp.hstack(datas)
+            else:
+                result = sp.concatenate(datas, axis=dim)
+        else:
+            result = np.concatenate(datas, axis=dim)
+
+        return Matrix(result)
+   
     @staticmethod
     def diag(obj, k=0):
         """
